@@ -1,0 +1,7 @@
+/* The engine may pin a DPR-1 canvas to its current pixel dimensions. Keep the
+   supplied viewport-sized layout authoritative; the engine still owns all
+   backing-store sizing, letterboxing and coordinate transforms. */
+#stage {
+  width: 100vw !important;
+  height: 100vh !important;
+}

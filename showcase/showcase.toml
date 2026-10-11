@@ -1,0 +1,11 @@
+[[media]]
+file = "combo.json.gz"
+name = "Keep the combo alive"
+
+[[media]]
+file = "board.png"
+name = "Find your way through"
+
+[[media]]
+file = "title.png"
+name = "Enter the grid"

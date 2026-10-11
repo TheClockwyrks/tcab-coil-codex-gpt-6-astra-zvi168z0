@@ -1,121 +1,149 @@
-// Coil — the game. THIS IS THE FILE YOU IMPLEMENT.
-//
-// `src/main.ts`, `src/constants.ts` and the project's configuration are supplied
-// with the project and stay as they are. What is missing is the game: the state
-// it holds, the debug surface that poses and reads that state, and the three
-// functions below.
-//
-// FIRST, DECLARE AND EXPORT `CoilState`, the game's whole state, and
-// `CoilDebugApi`, the debug and automation surface `specs/instrumentation.md`
-// specifies. The stub below is written against both names, so this project does
-// not compile until they exist — the type check failing on a freshly seeded
-// workspace is the starting point, not a broken seed. What `CoilState` carries
-// is yours to shape, subject to the snapshot `specs/instrumentation.md` fixes.
-//
-// THEN IMPLEMENT the three functions. `initialize` runs once, when the engine is
-// initialized, and returns the state and the debug surface together, as the pair
-// `[state, debug]`. `update` and `render` then run once each per frame — `update`
-// first, with the frame's delta time in SECONDS, then `render`.
-//
-// COIL RUNS ON A FIXED TICK. `update` accumulates the seconds it is handed and
-// resolves one tick for each whole TICK_SECONDS the accumulator holds, carrying
-// the remainder, and it resolves each tick in the six-step order
-// `specs/movement.md` fixes. Ticks run on the `playing` screen alone, and
-// `render` advances nothing.
-//
-// The state is a VALUE, and every frame is a transition over it. The engine hands
-// `update` the current state as a read-only view (`DeepReadonly<CoilState>`) and
-// stores whatever `update` returns as the next state; `render` is handed that
-// next state, as the same read-only view, and returns nothing. Nothing ever holds
-// a writable `CoilState`: `update` builds the next state from the current one
-// rather than assigning into it, and a frame that returns `undefined` is refused
-// by the engine. The engine's own documentation, seeded at `engine/`, defines all
-// of this and the scoped APIs each function receives; read it before you start.
-//
-// The engine returns the surface from `engine.debug`, exactly as `initialize`
-// handed it over, which is how the game is driven from code
-// (`specs/instrumentation.md`). Because no one holds a writable state, the
-// surface is written in the shape of `update`: a pose takes the current state and
-// returns the next (`setScore(state, points)`), a reading takes the state and
-// returns what it read (`snapshot(state)`), and a caller drives them through
-// `engine.apply` and `engine.state`. Where its implementation lives under `src/`
-// is your call; the only fixed point is that `initialize` returns it.
-//
-// THE ART AND THE SOUND ARE YOURS TO PRODUCE. Coil ships neither. `specs/assets.md`
-// states which binary on the `PATH` makes each file, where it lands under
-// `assets/`, and the bar it is held to; `src/constants.ts` names the paths. Load
-// them through the engine's asset loader and bind the cues to its cue bus, both
-// documented at `engine/`.
+import "./stage.css";
+import type { Game, UpdateApi } from "@clockwyrks/simple-2d";
+import * as C from "./constants";
+import { debug } from "./debug";
+import {
+  enter,
+  menuItemRect,
+  menuItems,
+  opening,
+  startRound,
+  tick,
+  type Model,
+  type State,
+} from "./model";
+import { render } from "./render";
 
-import type {
-  Game,
-  InitApi,
-  RenderApi,
-  UpdateApi,
-} from "@clockwyrks/simple-2d";
-import type { DeepReadonly } from "ts-essentials";
+export type CoilState = Model;
+export type CoilDebugApi = typeof debug;
+export const BACKGROUND = "#071317";
 
-/**
- * The stage background, a CSS color string. `src/main.ts` hands it to the engine
- * as the color the canvas is cleared to each frame, so the letterbox bars around
- * the stage match the board's surround. This placeholder is replaced by the
- * build with the color its board uses.
- */
-export const BACKGROUND = "#000";
+function accept(s: State, api: UpdateApi): CoilState {
+  let next: CoilState = { ...s };
+  switch (s.screen) {
+    case "title":
+      next.titleIndex = s.menuIndex;
+      if (s.menuIndex === 1) return enter(next, "howto");
+      break;
+    case "howto":
+      return enter(s, "title");
+    case "paused":
+      if (s.menuIndex === 0) return enter(s, "playing");
+      if (s.menuIndex === 2) return enter(s, "title");
+      break;
+    case "gameover":
+    case "cleared":
+      if (s.menuIndex === 1) return enter(s, "title");
+      break;
+    case "playing":
+      return next;
+  }
+  next = startRound(next);
+  api.audio.loop(C.CUES.music);
+  return next;
+}
 
-const NOT_IMPLEMENTED = "Coil: src/game.ts is not implemented yet";
-
-/**
- * The game this build's engine drives.
- *
- * Implement all three functions. Nothing else in the project needs changing for
- * the game to run: `src/main.ts` already binds this object to the engine.
- */
 export const game: Game<CoilState, CoilDebugApi> = {
-  /**
-   * Runs once, before any frame.
-   *
-   * Register every action in ACTIONS against its BINDINGS, define the four CUES
-   * over the produced files, load the sprite set through the asset loader,
-   * register the diagnostic sources specs/instrumentation.md lists — each is
-   * handed the state current at the read, so none closes over the state built
-   * here — and build the complete initial state: the title screen, with every
-   * field of CoilState set. Return it beside the debug surface.
-   */
-  initialize(_api: InitApi<CoilState>): [CoilState, CoilDebugApi] {
-    throw new Error(NOT_IMPLEMENTED);
+  async initialize(api) {
+    for (const action of C.ACTIONS)
+      api.input.register(action, { keys: [...C.BINDINGS[action]] });
+    const paths = [
+      ...C.SPRITE_PATHS.head,
+      C.SPRITE_PATHS.body,
+      C.SPRITE_PATHS.corner,
+      C.SPRITE_PATHS.tail,
+    ];
+    const [images] = await Promise.all([
+      Promise.all(paths.map((path) => api.assets.loadImage(path))),
+      Promise.all(
+        Object.values(C.CUES).map((cue) =>
+          api.audio.load(cue, C.CUE_PATHS[cue]),
+        ),
+      ),
+    ]);
+    const sprites = Object.fromEntries(
+      paths.map((path, i) => [path, images[i]]),
+    );
+    for (const name of [
+      "screen",
+      "score",
+      "best",
+      "combo",
+      "comboWindow",
+      "dir",
+    ] as const)
+      api.diagnostics.register(name, (s) => s[name]);
+    api.diagnostics.register("length", (s) => s.snake.length);
+    api.diagnostics.register(
+      "head",
+      (s) => `${s.snake[0].col}, ${s.snake[0].row}`,
+    );
+    api.diagnostics.register("pellet", (s) =>
+      s.pellet ? `${s.pellet.col}, ${s.pellet.row}` : "none",
+    );
+    return [opening(sprites), debug];
   },
-
-  /**
-   * Runs once per frame, before `render`: the next state, from the current one.
-   *
-   * `dt` is the real elapsed SECONDS of this frame. Read the frame's actions and
-   * act on them per screen as specs/controls.md states, accumulate `dt` into the
-   * tick accumulator and into `simTime` on the `playing` screen, resolve every
-   * whole tick the accumulator holds in the order specs/movement.md fixes, play
-   * cues on the tick their event resolves, and mirror the engine's mute bit into
-   * the returned state's `muted`. The value returned is what `render` draws and
-   * what the next `update` receives; `state` itself is read-only and stays as it
-   * was.
-   */
-  update(
-    _state: DeepReadonly<CoilState>,
-    _api: UpdateApi,
-    _dt: number,
-  ): CoilState {
-    throw new Error(NOT_IMPLEMENTED);
+  update(state, api, dt) {
+    let s: CoilState = { ...state, best: Math.max(state.best, state.score) };
+    const pressed = Object.fromEntries(
+      C.ACTIONS.map((a) => [a, api.input.pressed(a)]),
+    );
+    if (pressed.mute) api.audio.setMuted(!api.audio.muted());
+    s.muted = api.audio.muted();
+    if (s.screen === "playing") {
+      if (pressed.back || pressed.pause) s = enter(s, "paused");
+      else if (s.steering)
+        for (const dir of C.DIRECTIONS)
+          if (pressed[dir] && s.turns.length < C.TURN_QUEUE_MAX)
+            s.turns = [...s.turns, dir];
+    } else {
+      const count = menuItems(s.screen).length;
+      if (pressed.up) s.menuIndex = (s.menuIndex + count - 1) % count;
+      if (pressed.down) s.menuIndex = (s.menuIndex + 1) % count;
+      if (pressed.back && s.screen !== "title")
+        s = enter(s, s.screen === "paused" ? "playing" : "title");
+      else if (pressed.pause && s.screen === "paused") s = enter(s, "playing");
+      else if (pressed.confirm) s = accept(s, api);
+    }
+    // Samples preserve both edges of a quick click, and touch contact identity.
+    if (s.screen !== "playing")
+      for (const p of api.input.pointerSamples()) {
+        const index = menuItems(s.screen).findIndex((_, i) => {
+          const r = menuItemRect(s, i)!;
+          return p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h;
+        });
+        if (index >= 0) s.menuIndex = index;
+        if (p.type === "down")
+          s.pointerPress =
+            index >= 0 ? { id: p.id, index, screen: s.screen } : null;
+        if (p.type === "up") {
+          const press = s.pointerPress;
+          s.pointerPress = null;
+          if (
+            press &&
+            press.id === p.id &&
+            press.index === index &&
+            press.screen === s.screen
+          )
+            s = accept(s, api);
+        }
+      }
+    if (s.screen === "playing") {
+      s.simTime += dt;
+      s.accumulator += dt;
+      while (
+        s.accumulator + 1e-10 >= C.TICK_SECONDS &&
+        s.screen === "playing"
+      ) {
+        s.accumulator = Math.max(0, s.accumulator - C.TICK_SECONDS);
+        s = tick(s, (cue) => api.audio.play(cue));
+      }
+      s.bursts = s.bursts.filter((b) => s.simTime - b.time < 0.65);
+    }
+    s.best = Math.max(s.best, s.score);
+    if (s.screen !== "playing" && s.screen !== "paused")
+      api.audio.stop(C.CUES.music);
+    return s;
   },
-
-  /**
-   * Runs once per frame, after `update`, with the state `update` returned.
-   *
-   * `api.ctx` arrives cleared and already carrying the logical transform, so draw
-   * in 1280x720 coordinates and never read the canvas element's size. Map each
-   * cell onto its logical square with BOARD_X, BOARD_Y, and CELL. The state
-   * arrives read-only, so the type is what guarantees that rendering changes
-   * nothing.
-   */
-  render(_state: DeepReadonly<CoilState>, _api: RenderApi): void {
-    throw new Error(NOT_IMPLEMENTED);
-  },
+  render,
 };
